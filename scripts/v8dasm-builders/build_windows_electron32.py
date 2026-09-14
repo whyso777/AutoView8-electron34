@@ -84,8 +84,8 @@ def ensure_v8_checkout(userprofile: Path, env: dict[str, str]) -> Path:
     root = userprofile / "v8"
     root.mkdir(parents=True, exist_ok=True)
     if not (root / "v8" / ".git").exists():
-        log("===== fetch v8 =====")
-        run(["fetch", "v8"], cwd=root, env=env)
+        log("===== fetch v8 (no history) =====")
+        run(["fetch", "--no-history", "v8"], cwd=root, env=env)
         gclient = root / ".gclient"
         if gclient.exists():
             text = gclient.read_text(encoding="utf-8")
@@ -96,7 +96,7 @@ def ensure_v8_checkout(userprofile: Path, env: dict[str, str]) -> Path:
     v8_dir = root / "v8"
     run(["git", "fetch", "--tags", "--force"], cwd=v8_dir, env=env)
     run(["git", "checkout", V8_VERSION], cwd=v8_dir, env=env)
-    run(["gclient", "sync"], cwd=root, env=env)
+    run(["gclient", "sync", "--no-history", "-D"], cwd=root, env=env)
     run(["gclient", "runhooks"], cwd=root, env=env)
     return v8_dir
 
@@ -121,7 +121,7 @@ def configure_and_build(v8_dir: Path, ws: Path, env: dict[str, str]) -> Path:
     args_src = ws / "configs" / "electron32-args.gn"
     shutil.copy2(args_src, out_dir / "args.gn")
     run(["gn", "gen", str(out_dir)], cwd=v8_dir, env=env)
-    run(["ninja", "-C", str(out_dir), "-j1", "v8_monolith"], cwd=v8_dir, env=env)
+    run(["ninja", "-C", str(out_dir), "-j2", "v8_monolith"], cwd=v8_dir, env=env)
 
     if not monolith.exists():
         log(f"ERROR: missing {monolith}")
