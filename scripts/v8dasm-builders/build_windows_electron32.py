@@ -39,19 +39,37 @@ def find_vs_install() -> Path:
 
 
 def run(cmd: list[str], *, cwd: Path | None = None, env: dict[str, str] | None = None) -> None:
-    log(f">>> {' '.join(cmd)}")
-    result = subprocess.run(cmd, cwd=str(cwd) if cwd else None, env=env, text=True)
+    # On Windows, bare tool names like "gclient"/"fetch"/"gn" are .bat files;
+    # subprocess won't resolve them via PATHEXT, so resolve explicitly.
+    exe = cmd[0]
+    search_path = (env or os.environ).get("PATH")
+    resolved = shutil.which(exe, path=search_path)
+    if resolved:
+        exe = resolved
+    full = [exe, *cmd[1:]]
+    log(f">>> {' '.join(full)}")
+    result = subprocess.run(full, cwd=str(cwd) if cwd else None, env=env, text=True)
     if result.returncode != 0:
         raise SystemExit(result.returncode)
 
 
+def _find_gclient(base: Path) -> Path | None:
+    """Locate gclient.bat at the top of `base` or one level deeper (nested unzip)."""
+    candidates = [base / "gclient.bat", *base.glob("*/gclient.bat")]
+    for c in candidates:
+        if c.exists():
+            return c
+    return None
+
+
 def ensure_depot_tools(userprofile: Path, env: dict[str, str]) -> None:
     depot = userprofile / "depot_tools"
-    gclient = depot / "gclient.bat"
-    if not gclient.exists():
+    gclient = _find_gclient(depot)
+    if gclient is None:
         log("===== Getting depot_tools =====")
         if depot.exists():
             shutil.rmtree(depot, ignore_errors=True)
+        depot.mkdir(parents=True, exist_ok=True)
         zip_path = userprofile / "depot_tools.zip"
         run(
             [
@@ -73,10 +91,13 @@ def ensure_depot_tools(userprofile: Path, env: dict[str, str]) -> None:
             env=env,
         )
         zip_path.unlink(missing_ok=True)
-    if not gclient.exists():
-        log(f"ERROR: depot_tools incomplete: {gclient}")
+        gclient = _find_gclient(depot)
+    if gclient is None:
+        log(f"ERROR: depot_tools incomplete under {depot}")
         raise SystemExit(1)
-    env["PATH"] = str(depot) + os.pathsep + env.get("PATH", "")
+    depot_real = gclient.parent
+    log(f"depot_tools at: {depot_real}")
+    env["PATH"] = str(depot_real) + os.pathsep + env.get("PATH", "")
     run(["gclient"], cwd=userprofile, env=env)
 
 
