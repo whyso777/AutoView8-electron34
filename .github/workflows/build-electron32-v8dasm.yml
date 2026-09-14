@@ -58,22 +58,6 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Cache depot_tools
-        uses: actions/cache@v4
-        with:
-          path: ${{ runner.temp }}/depot_tools
-          key: depot-tools-win-${{ runner.os }}-v4
-
-      - name: Prepare depot_tools junction
-        shell: pwsh
-        run: |
-          $dt = "${{ runner.temp }}/depot_tools"
-          New-Item -ItemType Directory -Force -Path $dt | Out-Null
-          $link = Join-Path $env:USERPROFILE 'depot_tools'
-          if (Test-Path $link) { cmd /c "rmdir `"$link`" 2>nul" }
-          New-Item -ItemType Junction -Path $link -Target $dt | Out-Null
-          Write-Host "depot_tools gclient.bat: $(Test-Path (Join-Path $dt 'gclient.bat'))"
-
       - name: Build v8dasm
         shell: pwsh
         run: |
