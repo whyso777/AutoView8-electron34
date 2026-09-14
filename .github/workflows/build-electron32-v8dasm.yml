@@ -1,0 +1,150 @@
+name: Build v8dasm (Electron 32 / V8 12.8.374.38)
+
+on:
+  workflow_dispatch:
+    inputs:
+      decompile_samples:
+        description: 'After build, decompile samples/*.jsc with View8'
+        required: false
+        default: true
+        type: boolean
+
+concurrency:
+  group: electron32-v8dasm-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  V8_VERSION: "12.8.374.38"
+  DEPOT_TOOLS_WIN_TOOLCHAIN: "0"
+  vs2022_install: "C:\\Program Files\\Microsoft Visual Studio\\2022\\Enterprise"
+  _CL_: "/D_SILENCE_ALL_CXX20_DEPRECATION_WARNINGS"
+
+jobs:
+  build-v8dasm-windows:
+    name: Windows x64 v8dasm
+    runs-on: windows-2022
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Cache depot_tools
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/depot_tools
+          key: depot-tools-win-${{ runner.os }}-v4
+
+      - name: Prepare depot_tools junction
+        shell: pwsh
+        run: |
+          $dt = "${{ runner.temp }}/depot_tools"
+          New-Item -ItemType Directory -Force -Path $dt | Out-Null
+          $link = Join-Path $env:USERPROFILE 'depot_tools'
+          if (Test-Path $link) { cmd /c "rmdir `"$link`" 2>nul" }
+          New-Item -ItemType Junction -Path $link -Target $dt | Out-Null
+          Write-Host "depot_tools gclient.bat: $(Test-Path (Join-Path $dt 'gclient.bat'))"
+
+      - name: Build v8dasm
+        shell: pwsh
+        run: |
+          python scripts/v8dasm-builders/build_windows_electron32.py *> build-step.log
+          if ($LASTEXITCODE -ne 0) {
+            Get-Content build-step.log -Tail 100
+            "`n## Build tail (last 100 lines)`n" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+            Get-Content build-step.log -Tail 100 | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+            exit $LASTEXITCODE
+          }
+          Get-Content build-step.log -Tail 40
+          $bin = Join-Path $env:GITHUB_WORKSPACE "Bin\$env:V8_VERSION.exe"
+          if (-not (Test-Path $bin)) { throw "missing staged binary $bin" }
+          Get-Item $bin | Format-List Name, Length, FullName
+
+      - name: Upload build logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-failure-logs
+          path: |
+            patch-state.log
+            build-step.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Smoke test on sample preload
+        shell: pwsh
+        run: |
+          $exe = "Bin\${{ env.V8_VERSION }}.exe"
+          $jsc = "samples\preload-index.jsc"
+          if (-not (Test-Path $jsc)) { throw "Missing $jsc" }
+          $out = "${{ runner.temp }}\preload.dis.txt"
+          & $exe $jsc | Out-File -FilePath $out -Encoding utf8
+          if (-not (Select-String -Path $out -Pattern "Start SharedFunctionInfo" -Quiet)) {
+            throw "v8dasm output missing Start SharedFunctionInfo — deserialization failed"
+          }
+          Write-Host "Smoke test OK: $($out) ($((Get-Item $out).Length) bytes)"
+
+      - name: Upload v8dasm artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: v8dasm-windows-${{ env.V8_VERSION }}-electron32
+          path: |
+            Bin/${{ env.V8_VERSION }}.exe
+            Disassembler/v8dasm.cpp
+          retention-days: 90
+
+  decompile-samples:
+    name: View8 decompile samples
+    needs: build-v8dasm-windows
+    if: ${{ inputs.decompile_samples != false }}
+    runs-on: windows-2022
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install View8 Python deps
+        run: pip install parse setuptools
+
+      - name: Download v8dasm
+        uses: actions/download-artifact@v4
+        with:
+          name: v8dasm-windows-${{ env.V8_VERSION }}-electron32
+          path: artifact
+
+      - name: Run View8 on samples
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path Bin, output | Out-Null
+          Copy-Item "artifact\${{ env.V8_VERSION }}.exe" "Bin\${{ env.V8_VERSION }}.exe"
+          $dis = Resolve-Path "Bin\${{ env.V8_VERSION }}.exe"
+          Get-ChildItem samples\*.jsc | ForEach-Object {
+            $out = "output\$($_.BaseName).decompiled.js"
+            Write-Host "Decompiling $($_.Name) -> $out"
+            python view8.py $_.FullName $out -p $dis
+            if (-not (Test-Path $out)) { throw "Missing output $out" }
+            Get-Item $out | Format-List Name, Length
+          }
+
+      - name: Upload decompiled JS
+        uses: actions/upload-artifact@v4
+        with:
+          name: decompiled-js-electron32
+          path: output/*.decompiled.js
+          retention-days: 90
+
+      - name: Summary
+        shell: pwsh
+        run: |
+          Write-Host "## Decompile results" >> $env:GITHUB_STEP_SUMMARY
+          Get-ChildItem output\*.decompiled.js | ForEach-Object {
+            $lines = (Get-Content $_.FullName | Measure-Object -Line).Lines
+            Write-Host "- $($_.Name): $lines lines" >> $env:GITHUB_STEP_SUMMARY
+          }
