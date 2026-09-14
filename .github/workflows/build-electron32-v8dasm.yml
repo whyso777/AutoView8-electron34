@@ -27,6 +27,32 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Free up disk space
+        shell: pwsh
+        run: |
+          Write-Host "Free space BEFORE cleanup:"
+          Get-PSDrive C | Select-Object Used,Free
+          $targets = @(
+            "C:\Android",
+            "C:\Program Files (x86)\Android",
+            "C:\Miniconda",
+            "C:\Program Files\MongoDB",
+            "C:\Program Files\PostgreSQL",
+            "C:\Program Files\Microsoft SDKs\Azure",
+            "C:\SeleniumWebDrivers",
+            "C:\selenium",
+            "$env:CHROMEWEBDRIVER",
+            "C:\Program Files\Google\Chrome\Application"
+          )
+          foreach ($t in $targets) {
+            if ($t -and (Test-Path $t)) {
+              Write-Host "Removing $t"
+              Remove-Item -Recurse -Force $t -ErrorAction SilentlyContinue
+            }
+          }
+          Write-Host "Free space AFTER cleanup:"
+          Get-PSDrive C | Select-Object Used,Free
+
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with:
